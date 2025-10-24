@@ -1,8 +1,17 @@
-cython
-cffi
-opencv-python
-scipy
-easydict
-matplotlib
-pyyaml
-tensorboardX
+# Recommended Python version: 3.6 (PyTorch 0.3.x compatibility)
+https://download.pytorch.org/whl/cu80/torch-0.3.1-cp36-cp36m-linux_x86_64.whl
+https://download.pytorch.org/whl/cu80/torchvision-0.2.0-py2.py3-none-any.whl
+
+numpy==1.13.3
+scipy==1.1.0
+cython==0.28.5
+cffi==1.11.5
+opencv-python==3.4.2.17
+Pillow==5.4.1
+matplotlib==2.2.3
+pyyaml==5.1
+easydict==1.9
+tensorboardX==1.6
+pycocotools==2.0.0
+h5py==2.9.0
+IPython==7.6.1
