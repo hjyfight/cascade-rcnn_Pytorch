@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
-import scipy
 import colorsys
 import random
 import torchvision.models as models
@@ -75,9 +74,12 @@ def unmold_mask(mask, bbox, image_shape):
     if x2 == x1 or y2==y1:
         return np.zeros(image_shape[:2], dtype=np.uint8)
         
-    mask = scipy.misc.imresize(
-        mask, (y2 - y1, x2 - x1), interp='bilinear').astype(np.float32) / 255.0
-    mask = np.where(mask >= threshold, 1, 0).astype(np.uint8)
+    target_h = max(y2 - y1, 1)
+    target_w = max(x2 - x1, 1)
+    resized_mask = cv2.resize(mask.astype(np.float32), (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    if resized_mask.max() > 1:
+        resized_mask = resized_mask / 255.0
+    mask = np.where(resized_mask >= threshold, 1, 0).astype(np.uint8)
 
     # Put the mask in the right location.
     full_mask = np.zeros(image_shape[:2], dtype=np.uint8)
@@ -135,7 +137,7 @@ def vis_det_and_mask(im, class_name, dets, masks, thresh=0.8):
             apply_mask(im, full_mask, draw_mask, colors_mask[i], 0.5)
             draw_mask += full_mask
             cv2.putText(im, '%s' % (class_name), (bbox[0]+5, bbox[1] + 12), cv2.FONT_HERSHEY_PLAIN,
-								1.0, (255,255,255), thickness=1)
+                                1.0, (255,255,255), thickness=1)
     return im
 
 

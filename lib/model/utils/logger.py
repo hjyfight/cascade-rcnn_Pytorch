@@ -1,7 +1,7 @@
 # Code referenced from https://gist.github.com/gyglim/1f8dfb1b5c82627ae3efcfbbadb9f514
 import tensorflow as tf
 import numpy as np
-import scipy.misc 
+from PIL import Image
 try:
     from StringIO import StringIO  # Python 2.7
 except ImportError:
@@ -29,7 +29,13 @@ class Logger(object):
                 s = StringIO()
             except:
                 s = BytesIO()
-            scipy.misc.toimage(img).save(s, format="png")
+            if np.issubdtype(img.dtype, np.floating):
+                clipped = np.clip(img, 0.0, 1.0)
+                img_to_save = (clipped * 255).astype(np.uint8)
+            else:
+                img_to_save = np.clip(img, 0, 255).astype(np.uint8)
+            image = Image.fromarray(img_to_save)
+            image.save(s, format="PNG")
 
             # Create an Image object
             img_sum = tf.Summary.Image(encoded_image_string=s.getvalue(),

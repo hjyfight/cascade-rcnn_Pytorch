@@ -16,7 +16,6 @@ import pdb
 import time
 
 import torch
-from torch.autograd import Variable
 import torch.nn as nn
 
 from torch.utils.data.sampler import Sampler
@@ -222,7 +221,11 @@ if __name__ == '__main__':
     # train set
     # -- Note: Use validation set and disable the flipped to enable faster loading.
     cfg.TRAIN.USE_FLIPPED = True
-    cfg.USE_GPU_NMS = args.cuda
+    device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
+    use_cuda = device.type == 'cuda'
+    cfg.CUDA = use_cuda
+    cfg.USE_GPU_NMS = use_cuda
+    args.cuda = use_cuda
     imdb, roidb, ratio_list, ratio_index = combined_roidb(args.imdb_name)
     train_size = len(roidb)
 
@@ -251,28 +254,6 @@ if __name__ == '__main__':
     # print(dataset[k][2], dataset[k][3], dataset[k][4])
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
                                              sampler=sampler_batch, num_workers=args.num_workers)
-
-    # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    if args.cuda:
-        im_data = im_data.cuda()
-        im_info = im_info.cuda()
-        num_boxes = num_boxes.cuda()
-        gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data)
-    im_info = Variable(im_info)
-    num_boxes = Variable(num_boxes)
-    gt_boxes = Variable(gt_boxes)
-
-    if args.cuda:
-        cfg.CUDA = True
 
     # initilize the network here.
     if args.cascade:
@@ -315,7 +296,7 @@ if __name__ == '__main__':
         load_name = os.path.join(output_dir,
                                  'fpn_{}_{}_{}.pth'.format(args.checksession, args.checkepoch, args.checkpoint))
         _print("loading checkpoint %s" % (load_name), )
-        checkpoint = torch.load(load_name)
+        checkpoint = torch.load(load_name, map_location=device)
         args.session = checkpoint['session']
         args.start_epoch = checkpoint['epoch']
         FPN.load_state_dict(checkpoint['model'])
@@ -325,11 +306,10 @@ if __name__ == '__main__':
             cfg.POOLING_MODE = checkpoint['pooling_mode']
         _print("loaded checkpoint %s" % (load_name), )
 
-    if args.mGPUs:
+    if args.mGPUs and use_cuda:
         FPN = nn.DataParallel(FPN)
 
-    if args.cuda:
-        FPN.cuda()
+    FPN.to(device)
 
     iters_per_epoch = int(train_size / args.batch_size)
 
@@ -346,29 +326,31 @@ if __name__ == '__main__':
         data_iter = iter(dataloader)
 
         for step in range(iters_per_epoch):
-            data = data_iter.next()
-            im_data.data.resize_(data[0].size()).copy_(data[0])
-            im_info.data.resize_(data[1].size()).copy_(data[1])
-            gt_boxes.data.resize_(data[2].size()).copy_(data[2])
-            num_boxes.data.resize_(data[3].size()).copy_(data[3])
+            data = next(data_iter)
+            im_data = data[0].to(device)
+            im_info = data[1].to(device)
+            gt_boxes = data[2].to(device)
+            num_boxes = data[3].to(device)
 
             FPN.zero_grad()
             if args.cascade:
+                outputs = FPN(im_data, im_info, gt_boxes, num_boxes)
                 _, _, _, rpn_loss_cls, rpn_loss_box, \
                 RCNN_loss_cls, RCNN_loss_bbox, RCNN_loss_cls_2nd, RCNN_loss_bbox_2nd, RCNN_loss_cls_3rd, RCNN_loss_bbox_3rd, \
-                roi_labels = FPN(im_data, im_info, gt_boxes, num_boxes)
+                roi_labels = outputs
 
-                loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
-                       + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean() \
-                       + RCNN_loss_cls_2nd.mean() + RCNN_loss_bbox_2nd.mean() \
-                       + RCNN_loss_cls_3rd.mean() + RCNN_loss_bbox_3rd.mean()
+                loss = (rpn_loss_cls.mean() + rpn_loss_box.mean() +
+                        RCNN_loss_cls.mean() + RCNN_loss_bbox.mean() +
+                        RCNN_loss_cls_2nd.mean() + RCNN_loss_bbox_2nd.mean() +
+                        RCNN_loss_cls_3rd.mean() + RCNN_loss_bbox_3rd.mean())
             else:
+                outputs = FPN(im_data, im_info, gt_boxes, num_boxes)
                 _, _, _, rpn_loss_cls, rpn_loss_box, RCNN_loss_cls, RCNN_loss_bbox, \
-                roi_labels = FPN(im_data, im_info, gt_boxes, num_boxes)
+                roi_labels = outputs
 
-                loss = rpn_loss_cls.mean() + rpn_loss_box.mean()+ RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
+                loss = rpn_loss_cls.mean() + rpn_loss_box.mean() + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
 
-            loss_temp += loss.data[0]
+            loss_temp += loss.item()
 
             # backward
             optimizer.zero_grad()
@@ -380,34 +362,19 @@ if __name__ == '__main__':
                 if step > 0:
                     loss_temp /= args.disp_interval
 
-                if args.mGPUs:
-                    loss_rpn_cls = rpn_loss_cls.mean().data[0]
-                    loss_rpn_box = rpn_loss_box.mean().data[0]
-                    loss_rcnn_cls = RCNN_loss_cls.mean().data[0]
-                    loss_rcnn_box = RCNN_loss_bbox.mean().data[0]
+                loss_rpn_cls = rpn_loss_cls.mean().item()
+                loss_rpn_box = rpn_loss_box.mean().item()
+                loss_rcnn_cls = RCNN_loss_cls.mean().item()
+                loss_rcnn_box = RCNN_loss_bbox.mean().item()
 
-                    if args.cascade:
-                        loss_rcnn_cls_2nd = RCNN_loss_cls_2nd.mean().data[0]
-                        loss_rcnn_box_2nd = RCNN_loss_bbox_2nd.mean().data[0]
-                        loss_rcnn_cls_3rd = RCNN_loss_cls_3rd.mean().data[0]
-                        loss_rcnn_box_3rd = RCNN_loss_bbox_3rd.mean().data[0]
+                if args.cascade:
+                    loss_rcnn_cls_2nd = RCNN_loss_cls_2nd.mean().item()
+                    loss_rcnn_box_2nd = RCNN_loss_bbox_2nd.mean().item()
+                    loss_rcnn_cls_3rd = RCNN_loss_cls_3rd.mean().item()
+                    loss_rcnn_box_3rd = RCNN_loss_bbox_3rd.mean().item()
 
-                    fg_cnt = torch.sum(roi_labels.data.ne(0))
-                    bg_cnt = roi_labels.data.numel() - fg_cnt
-                else:
-                    loss_rpn_cls = rpn_loss_cls.data[0]
-                    loss_rpn_box = rpn_loss_box.data[0]
-                    loss_rcnn_cls = RCNN_loss_cls.data[0]
-                    loss_rcnn_box = RCNN_loss_bbox.data[0]
-
-                    if args.cascade:
-                        loss_rcnn_cls_2nd = RCNN_loss_cls_2nd.data[0]
-                        loss_rcnn_box_2nd = RCNN_loss_bbox_2nd.data[0]
-                        loss_rcnn_cls_3rd = RCNN_loss_cls_3rd.data[0]
-                        loss_rcnn_box_3rd = RCNN_loss_bbox_3rd.data[0]
-
-                    fg_cnt = torch.sum(roi_labels.data.ne(0))
-                    bg_cnt = roi_labels.data.numel() - fg_cnt
+                fg_cnt = int(torch.sum(roi_labels.detach().ne(0)).item())
+                bg_cnt = roi_labels.numel() - fg_cnt
 
                 _print("[session %d][epoch %2d][iter %4d/%4d] loss: %.4f, lr: %.2e" \
                        % (args.session, epoch, step, iters_per_epoch, loss_temp, lr), )

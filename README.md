@@ -33,9 +33,9 @@ I benchmark this code thoroughly on pascal voc2007 and 07+12. Below are the resu
 
 ## Environment Setup
 
-This project has been validated on Ubuntu 16.04/18.04 with NVIDIA GPUs. Before installing Python packages, ensure that your system provides:
+The project now targets modern Python and PyTorch releases. It has been validated on Ubuntu 18.04/20.04 with NVIDIA GPUs using Python 3.8 and PyTorch 1.10.2. Before installing Python packages, make sure your system provides:
 
-- An NVIDIA GPU with CUDA 8.0+ and cuDNN installed
+- An NVIDIA GPU with CUDA 11.3+ and cuDNN installed (CPU-only setups are also supported)
 - GCC 5 or newer together with the standard build toolchain
 
 You can install the required build packages on Ubuntu with:
@@ -57,10 +57,10 @@ Follow the steps below to configure the Python environment:
 
 2. **Create and activate a Python environment**
 
-   The code base targets Python 3.6. Create an isolated environment using either Conda or `venv`:
+   The code base targets Python 3.8 or newer. Create an isolated environment using either Conda or `venv`:
 
    ```shell
-   conda create -n cascade-rcnn python=3.6
+   conda create -n cascade-rcnn python=3.8
    conda activate cascade-rcnn
    ```
    _or_
@@ -71,14 +71,15 @@ Follow the steps below to configure the Python environment:
 
 3. **Install PyTorch**
 
-   Cascade R-CNN relies on PyTorch 0.3.x. Install the wheel compatible with your CUDA toolkit (CUDA 8.0 shown below):
+   Install PyTorch 1.10.2 and torchvision 0.11.3 that match your hardware. Refer to the [official selector](https://pytorch.org/get-started/locally/) if you need a different CUDA version. Example commands:
 
    ```shell
-   pip install https://download.pytorch.org/whl/cu80/torch-0.3.1-cp36-cp36m-linux_x86_64.whl
-   pip install https://download.pytorch.org/whl/cu80/torchvision-0.2.0-py2.py3-none-any.whl
-   ```
+   # CUDA 11.3 build
+   pip install torch==1.10.2 torchvision==0.11.3 --extra-index-url https://download.pytorch.org/whl/cu113
 
-   For different CUDA versions or CPU-only builds, refer to the [PyTorch previous versions archive](https://pytorch.org/get-started/previous-versions/).
+   # CPU only build
+   pip install torch==1.10.2 torchvision==0.11.3
+   ```
 
 4. **Install the remaining Python dependencies**
 
