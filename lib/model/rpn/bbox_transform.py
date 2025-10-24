@@ -21,13 +21,13 @@ def bbox_decode(rois, bbox_pred, batch_size, class_agnostic, classes, im_info, t
         box_deltas = bbox_pred.data
         if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
             # Optionally normalize targets by a precomputed mean and stdev
+            stds = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_STDS, dtype=bbox_pred.dtype, device=bbox_pred.device)
+            means = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS, dtype=bbox_pred.dtype, device=bbox_pred.device)
             if class_agnostic or training:
-                box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                             + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+                box_deltas = box_deltas.view(-1, 4) * stds + means
                 box_deltas = box_deltas.view(batch_size, -1, 4)
             else:
-                box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                             + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+                box_deltas = box_deltas.view(-1, 4) * stds + means
                 box_deltas = box_deltas.view(batch_size, -1, 4 * classes)
 
         pred_boxes = bbox_transform_inv(boxes, box_deltas, batch_size)

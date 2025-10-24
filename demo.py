@@ -17,7 +17,6 @@ import pdb
 import time
 import cv2
 import torch
-from torch.autograd import Variable
 from PIL import Image
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.fpn.cascade.detnet_backbone import detnet as detnet_cascade
@@ -186,31 +185,21 @@ if __name__ == '__main__':
     print("load checkpoint %s" % (load_name))
 
     # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    if args.cuda:
-        im_data = im_data.cuda()
-        im_info = im_info.cuda()
-        num_boxes = num_boxes.cuda()
-        gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data, volatile=True)
-    im_info = Variable(im_info, volatile=True)
-    num_boxes = Variable(num_boxes, volatile=True)
-    gt_boxes = Variable(gt_boxes, volatile=True)
-
-    if args.cuda:
+    device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
+    if device.type == 'cuda':
         cfg.CUDA = True
+    else:
+        cfg.CUDA = False
+        args.cuda = False
 
-    if args.cuda:
-        fpn.cuda()
-
+    fpn.to(device)
     fpn.eval()
+
+    if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
+        bbox_norm_means = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS, dtype=torch.float32, device=device)
+        bbox_norm_stds = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_STDS, dtype=torch.float32, device=device)
+    else:
+        bbox_norm_means = bbox_norm_stds = None
 
     start = time.time()
     max_per_image = 100
@@ -237,39 +226,33 @@ if __name__ == '__main__':
         im_blob = blobs
         im_info_np = np.array([[im_blob.shape[1], im_blob.shape[2], im_scales[0]]], dtype=np.float32)
 
-        im_data_pt = torch.from_numpy(im_blob)
-        im_data_pt = im_data_pt.permute(0, 3, 1, 2)
-        im_info_pt = torch.from_numpy(im_info_np)
-
-        im_data.data.resize_(im_data_pt.size()).copy_(im_data_pt)
-        im_info.data.resize_(im_info_pt.size()).copy_(im_info_pt)
-        gt_boxes.data.resize_(1, 1, 5).zero_()
-        num_boxes.data.resize_(1).zero_()
-
-        # pdb.set_trace()
+        im_data = torch.from_numpy(im_blob).permute(0, 3, 1, 2).to(device)
+        im_info = torch.from_numpy(im_info_np).to(device)
+        gt_boxes = torch.zeros((1, 1, 5), dtype=torch.float32, device=device)
+        num_boxes = torch.zeros((1,), dtype=torch.int64, device=device)
 
         det_tic = time.time()
-        # rois, cls_prob, bbox_pred, rpn_loss, rcnn_loss = \
-        #     fpn(im_data, im_info, gt_boxes, num_boxes)
-        ret = fpn(im_data, im_info, gt_boxes, num_boxes)
+        with torch.no_grad():
+            ret = fpn(im_data, im_info, gt_boxes, num_boxes)
         rois, cls_prob, bbox_pred = ret[0:3]
 
-        scores = cls_prob.data
-        boxes = (rois[:, :, 1:5] / im_scales[0]).data
+        scores = cls_prob.detach()
+        boxes = (rois[:, :, 1:5] / im_scales[0]).detach()
 
         if cfg.TEST.BBOX_REG:
             # Apply bounding-box regression deltas
-            box_deltas = bbox_pred.data
+            box_deltas = bbox_pred.detach()
             if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
                 # Optionally normalize targets by a precomputed mean and stdev
-                box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                             + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+                stds = bbox_norm_stds.to(box_deltas.dtype)
+                means = bbox_norm_means.to(box_deltas.dtype)
+                box_deltas = box_deltas.view(-1, 4) * stds + means
                 box_deltas = box_deltas.view(1, -1, 4)
             pred_boxes = bbox_transform_inv(boxes, box_deltas, 1)
-            pred_boxes = clip_boxes(pred_boxes, im_info.data, 1)
+            pred_boxes = clip_boxes(pred_boxes, im_info, 1)
         else:
             # Simply repeat the boxes, once for each class
-            pred_boxes = np.tile(boxes, (1, scores.size[1]))
+            pred_boxes = boxes
 
         scores = scores.squeeze()
         pred_boxes = pred_boxes.squeeze()
@@ -286,7 +269,7 @@ if __name__ == '__main__':
             inds = torch.nonzero(scores[:, j] > thresh).view(-1)
             if inds.numel() > 0:
                 cls_scores = scores[:, j][inds]
-                _, order = torch.sort(cls_scores, 0, True)
+                _, order = torch.sort(cls_scores, dim=0, descending=True)
                 if args.class_agnostic:
                     cls_boxes = pred_boxes[inds, :]
                 else:

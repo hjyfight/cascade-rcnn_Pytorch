@@ -12,7 +12,7 @@ from __future__ import print_function
 
 import numpy as np
 import numpy.random as npr
-from scipy.misc import imread
+from PIL import Image
 from model.utils.config import cfg
 from model.utils.blob import prep_im_for_blob, im_list_to_blob
 import pdb
@@ -62,12 +62,8 @@ def _get_image_blob(roidb, scale_inds):
   processed_ims = []
   im_scales = []
   for i in range(num_images):
-    #im = cv2.imread(roidb[i]['image'])
-    im = imread(roidb[i]['image'])
-
-    if len(im.shape) == 2:
-      im = im[:,:,np.newaxis]
-      im = np.concatenate((im,im,im), axis=2)
+    image = Image.open(roidb[i]['image']).convert('RGB')
+    im = np.array(image)
     # flip the channel, since the original one using cv2
     # rgb -> bgr
     # im = im[:,:,::-1]

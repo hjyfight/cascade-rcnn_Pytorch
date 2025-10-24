@@ -18,7 +18,7 @@ import time
 import cv2
 import pickle
 import torch
-from torch.autograd import Variable
+import torch.nn as nn
 
 from roi_data_layer.roidb import combined_roidb
 from roi_data_layer.roibatchLoader import roibatchLoader
@@ -143,6 +143,12 @@ if __name__ == '__main__':
     pprint.pprint(cfg)
     np.random.seed(cfg.RNG_SEED)
 
+    device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
+    use_cuda = device.type == 'cuda'
+    cfg.CUDA = use_cuda
+    cfg.USE_GPU_NMS = use_cuda
+    args.cuda = use_cuda
+
     cfg.TRAIN.USE_FLIPPED = False
     imdb, roidb, ratio_list, ratio_index = combined_roidb(args.imdbval_name, False)
     imdb.competition_mode(on=True)
@@ -175,35 +181,17 @@ if __name__ == '__main__':
     fpn.create_architecture()
 
     print("load checkpoint %s" % (load_name))
-    checkpoint = torch.load(load_name)
+    checkpoint = torch.load(load_name, map_location=device)
     fpn.load_state_dict(checkpoint['model'])
     if 'pooling_mode' in checkpoint.keys():
         cfg.POOLING_MODE = checkpoint['pooling_mode']
 
     print('load model successfully!')
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
 
-    # ship to cuda
-    if args.cuda:
-        im_data = im_data.cuda()
-        im_info = im_info.cuda()
-        num_boxes = num_boxes.cuda()
-        gt_boxes = gt_boxes.cuda()
+    if args.mGPUs and use_cuda:
+        fpn = nn.DataParallel(fpn)
 
-    # make variable
-    im_data = Variable(im_data, volatile=True)
-    im_info = Variable(im_info, volatile=True)
-    num_boxes = Variable(num_boxes, volatile=True)
-    gt_boxes = Variable(gt_boxes, volatile=True)
-
-    if args.cuda:
-        cfg.CUDA = True
-
-    if args.cuda:
-        fpn.cuda()
+    fpn.to(device)
 
     start = time.time()
     max_per_image = 100
@@ -233,42 +221,49 @@ if __name__ == '__main__':
     det_file = os.path.join(output_dir, 'detections.pkl')
 
     fpn.eval()
+    if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
+        bbox_norm_means = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS, dtype=torch.float32, device=device)
+        bbox_norm_stds = torch.tensor(cfg.TRAIN.BBOX_NORMALIZE_STDS, dtype=torch.float32, device=device)
+    else:
+        bbox_norm_means = bbox_norm_stds = None
     empty_array = np.transpose(np.array([[], [], [], [], []]), (1, 0))
     for i in range(num_images):
-        data = data_iter.next()
-        im_data.data.resize_(data[0].size()).copy_(data[0])
-        im_info.data.resize_(data[1].size()).copy_(data[1])
-        gt_boxes.data.resize_(data[2].size()).copy_(data[2])
-        num_boxes.data.resize_(data[3].size()).copy_(data[3])
+        data = next(data_iter)
+        im_data = data[0].to(device)
+        im_info = data[1].to(device)
+        gt_boxes = data[2].to(device)
+        num_boxes = data[3].to(device)
 
         det_tic = time.time()
-        ret = fpn(im_data, im_info, gt_boxes, num_boxes)
+        with torch.no_grad():
+            ret = fpn(im_data, im_info, gt_boxes, num_boxes)
         rois, cls_prob, bbox_pred = ret[0:3]
 
-        scores = cls_prob.data
-        boxes = rois.data[:, :, 1:5]
+        scores = cls_prob.detach()
+        boxes = rois[:, :, 1:5].detach()
 
         if cfg.TEST.BBOX_REG:
             # Apply bounding-box regression deltas
-            box_deltas = bbox_pred.data
+            box_deltas = bbox_pred.detach()
             if cfg.TRAIN.BBOX_NORMALIZE_TARGETS_PRECOMPUTED:
                 # Optionally normalize targets by a precomputed mean and stdev
+                stds = bbox_norm_stds.to(box_deltas.dtype)
+                means = bbox_norm_means.to(box_deltas.dtype)
                 if args.class_agnostic:
-                    box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                                 + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+                    box_deltas = box_deltas.view(-1, 4) * stds + means
                     box_deltas = box_deltas.view(1, -1, 4)
                 else:
-                    box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                                 + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+                    box_deltas = box_deltas.view(-1, 4) * stds + means
                     box_deltas = box_deltas.view(1, -1, 4 * len(imdb.classes))
 
             pred_boxes = bbox_transform_inv(boxes, box_deltas, 1)
-            pred_boxes = clip_boxes(pred_boxes, im_info.data, 1)
+            pred_boxes = clip_boxes(pred_boxes, im_info, 1)
         else:
             # Simply repeat the boxes, once for each class
             pred_boxes = boxes
 
-        pred_boxes /= data[1][0][2]
+        scale = im_info[0, 2].item()
+        pred_boxes = pred_boxes / scale
 
         scores = scores.squeeze()
         pred_boxes = pred_boxes.squeeze()
@@ -283,7 +278,7 @@ if __name__ == '__main__':
             # if there is det
             if inds.numel() > 0:
                 cls_scores = scores[:, j][inds]
-                _, order = torch.sort(cls_scores, 0, True)
+                _, order = torch.sort(cls_scores, dim=0, descending=True)
                 if args.class_agnostic:
                     cls_boxes = pred_boxes[inds, :]
                 else:

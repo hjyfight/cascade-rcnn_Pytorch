@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import numpy as np
 
 
@@ -13,13 +12,14 @@ class RoIPool(nn.Module):
 
     def forward(self, features, rois):
         batch_size, num_channels, data_height, data_width = features.size()
-        num_rois = rois.size()[0]
-        outputs = Variable(torch.zeros(num_rois, num_channels, self.pooled_height, self.pooled_width)).cuda()
+        num_rois = rois.size(0)
+        outputs = torch.zeros(num_rois, num_channels, self.pooled_height, self.pooled_width,
+                              device=features.device, dtype=features.dtype)
 
         for roi_ind, roi in enumerate(rois):
-            batch_ind = int(roi[0].data[0])
+            batch_ind = int(roi[0].item())
             roi_start_w, roi_start_h, roi_end_w, roi_end_h = np.round(
-                roi[1:].data.cpu().numpy() * self.spatial_scale).astype(int)
+                roi[1:].detach().cpu().numpy() * self.spatial_scale).astype(int)
             roi_width = max(roi_end_w - roi_start_w + 1, 1)
             roi_height = max(roi_end_h - roi_start_h + 1, 1)
             bin_size_w = float(roi_width) / float(self.pooled_width)
