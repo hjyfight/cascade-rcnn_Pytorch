@@ -31,43 +31,82 @@ I benchmark this code thoroughly on pascal voc2007 and 07+12. Below are the resu
 | DetNet59                                                     | 1 GTX 1080 (Ti) | 1          | 1e-3 | 10       | 12        | 2.41hr      | 9511MB     | 53.0 | 80.7 | 58.2 |
 | [DetNet59-Cascade](https://drive.google.com/open?id=1AUBe1oIwCMVai2cIPIlZx-EgEtvMSYs-) | 1 GTX 1080 (Ti) | 1          | 1e-3 | 10       | 12        | 4.60hr      | 1073MB     | 55.6 | 80.1 | 61.0 |
 
-## Preparation
+## Environment Setup
 
-First of all, clone the code
+This project has been validated on Ubuntu 16.04/18.04 with NVIDIA GPUs. Before installing Python packages, ensure that your system provides:
 
-```
-git clone https://github.com/guoruoqian/cascade-rcnn_Pytorch.git
-```
+- An NVIDIA GPU with CUDA 8.0+ and cuDNN installed
+- GCC 5 or newer together with the standard build toolchain
 
-Then, create a folder:
+You can install the required build packages on Ubuntu with:
 
 ```shell
-cd cascade-rcnn_Pytorch && mkdir data
+sudo apt-get update
+sudo apt-get install build-essential python3-dev libglib2.0-0 libsm6 libxext6 libxrender-dev
 ```
 
-### prerequisites
+Follow the steps below to configure the Python environment:
 
-- Python 2.7 or 3.6
-- Pytorch 0.2.0 or higher（not support pytorch version >=0.4.0）
-- CUDA 8.0 or higher
-- tensorboardX
+1. **Clone the repository and create the data directory**
 
-### Data Preparation
+   ```shell
+   git clone https://github.com/guoruoqian/cascade-rcnn_Pytorch.git
+   cd cascade-rcnn_Pytorch
+   mkdir -p data
+   ```
 
-- VOC2007: Please follow the instructions in [py-faster-rcnn](https://github.com/rbgirshick/py-faster-rcnn#beyond-the-demo-installation-for-training-and-testing-models) to prepare VOC datasets. Actually, you can refer to any others. After downloading the data, creat softlinks in the folder data/.
-- VOC 07 + 12: Please follow the instructions in [YuwenXiong/py-R-FCN](https://github.com/YuwenXiong/py-R-FCN/blob/master/README.md#preparation-for-training--testing) . **I think this instruction is more helpful to prepare VOC datasets.**
+2. **Create and activate a Python environment**
 
-### Pretrained Model 
+   The code base targets Python 3.6. Create an isolated environment using either Conda or `venv`:
 
- You can download the detnet59 model which i trained on ImageNet from:
+   ```shell
+   conda create -n cascade-rcnn python=3.6
+   conda activate cascade-rcnn
+   ```
+   _or_
+   ```shell
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
 
-- detnet59: [dropbox](https://www.dropbox.com/home/DetNet?preview=detnet59.pth)，[baiduyun](https://pan.baidu.com/s/14_ztsAKcrZGb4nnm8aCMyQ)，[google drive](https://drive.google.com/open?id=1kKgjhpdb5ruoGkpZuEQ-ZIZkbxMtWZIQ)
+3. **Install PyTorch**
 
- Download it and put it into the data/pretrained_model/. 
+   Cascade R-CNN relies on PyTorch 0.3.x. Install the wheel compatible with your CUDA toolkit (CUDA 8.0 shown below):
 
-### Compilation
+   ```shell
+   pip install https://download.pytorch.org/whl/cu80/torch-0.3.1-cp36-cp36m-linux_x86_64.whl
+   pip install https://download.pytorch.org/whl/cu80/torchvision-0.2.0-py2.py3-none-any.whl
+   ```
 
-As pointed out by [ruotianluo/pytorch-faster-rcnn](https://github.com/ruotianluo/pytorch-faster-rcnn), choose the right `-arch` in `make.sh` file, to compile the cuda code: 
+   For different CUDA versions or CPU-only builds, refer to the [PyTorch previous versions archive](https://pytorch.org/get-started/previous-versions/).
+
+4. **Install the remaining Python dependencies**
+
+   ```shell
+   pip install -r requirements.txt
+   ```
+
+5. **Build the CUDA/C++ extensions**
+
+   ```shell
+   cd lib
+   sh make.sh
+   cd ..
+   ```
+
+   Make sure the `-arch` flag in `make.sh` matches your GPU architecture (see the reference table below).
+
+6. **(Optional) Verify the installation**
+
+   ```shell
+   python - <<'PY'
+   import torch
+   from model.utils.cython_nms import nms
+   print("Cascade R-CNN environment ready.")
+   PY
+   ```
+
+> **GPU architecture quick reference**
 
 | GPU model                  | Architecture |
 | :------------------------- | :----------: |
@@ -77,20 +116,18 @@ As pointed out by [ruotianluo/pytorch-faster-rcnn](https://github.com/ruotianlu
 | Grid K520 (AWS g2.2xlarge) |    sm_30     |
 | Tesla K80 (AWS p2.xlarge)  |    sm_37     |
 
-Install all the python dependencies using pip: 
+### Data Preparation
 
-```shell
-pip install -r requirements.txt
-```
+- **VOC 2007**: Please follow the instructions in [py-faster-rcnn](https://github.com/rbgirshick/py-faster-rcnn#beyond-the-demo-installation-for-training-and-testing-models) to prepare the VOC dataset. After downloading the data, create soft links in the `data/` folder.
+- **VOC 07 + 12**: Please follow the instructions in [YuwenXiong/py-R-FCN](https://github.com/YuwenXiong/py-R-FCN/blob/master/README.md#preparation-for-training--testing). **This guide is often more helpful for preparing VOC datasets.**
 
-Compile the cuda dependencies using following simple commands: 
+### Pretrained Model 
 
-```shell
-cd lib
-sh make.sh
-```
+You can download the detnet59 model which I trained on ImageNet from:
 
-It will compile all the modules you need, including NMS, ROI_Pooing, ROI_Align and ROI_Crop. The default version is compiled with Python 2.7, please compile by yourself if you are using a different python version. 
+- detnet59: [dropbox](https://www.dropbox.com/home/DetNet?preview=detnet59.pth)，[baiduyun](https://pan.baidu.com/s/14_ztsAKcrZGb4nnm8aCMyQ)，[google drive](https://drive.google.com/open?id=1kKgjhpdb5ruoGkpZuEQ-ZIZkbxMtWZIQ)
+
+Download it and put it into `data/pretrained_model/`.
 
 ## Usage
 
